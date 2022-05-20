@@ -1,0 +1,649 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: MLOps-TensorFlow-CICD-ipeline
+Parameters: 
+  UniqueID: 
+    Type: String
+    Default: yourinitials
+    Description: Enter your initials in lower case as a unique identifier for components created 
+    AllowedPattern: "^([a-z]|(d(?!d{0,2}.d{1,3}.d{1,3}.d{1,3})))([a-zd]|(.(?!(.|-)))|(-(?!.))){1,61}[a-zd.]$"
+  RepositoryBranch:
+    Type: String
+    Default: master
+    Description: Branch to trigger CodePipeline on commit. For this lab, you can leave this as master.
+  LambdaSeedBucket:
+    Type: String
+    Default: mlops-tf-lambda-code-yourinitials-uniqueid
+    Description: S3 Bucket containing your Lambda Functions
+  
+Resources:
+
+  CodePipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: BucketOwnerFullControl
+      VersioningConfiguration: 
+        Status: Enabled
+      BucketName:
+        Fn::Join:
+          - ""
+          - - "mlops-tf-codepipeline-artifacts-"
+            - !Ref UniqueID
+            - "-"
+            - !Select
+             - 0
+             - !Split
+              - "-"
+              - !Select
+                - 2
+                - !Split
+                  - "/"
+                  - !Ref "AWS::StackId"
+  #   ------------------------------------------------------------------------------
+  #   Create S3 bucket to store model artifacts created by after successfully 
+  #   completed training of the model. 
+  #   ------------------------------------------------------------------------------
+  ModelArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: BucketOwnerFullControl
+      VersioningConfiguration: 
+        Status: Enabled
+      BucketName:
+        Fn::Join:
+          - ""
+          - - "mlops-tf-model-artifacts-"
+            - !Ref UniqueID
+            - "-"
+            - !Select
+             - 0
+             - !Split
+              - "-"
+              - !Select
+                - 2
+                - !Split
+                  - "/"
+                  - !Ref "AWS::StackId"
+ 
+  S3DataBucket:
+    Type: AWS::S3::Bucket
+    Properties: 
+      AccessControl: BucketOwnerFullControl
+      VersioningConfiguration: 
+        Status: Enabled
+      BucketName:
+        Fn::Join:
+          - ""
+          - - "mlops-tf-data-"
+            - !Ref UniqueID
+            - "-"
+            - !Select
+             - 0
+             - !Split
+              - "-"
+              - !Select
+                - 2
+                - !Split
+                  - "/"
+                  - !Ref "AWS::StackId"
+   
+  CodeCommitRepo:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: 
+        Fn::Join:
+          - ""
+          - - "mlops-codecommit-tf-"
+            - !Ref UniqueID
+            - "-"
+            - !Select
+             - 0
+             - !Split
+              - "-"
+              - !Select
+                - 2
+                - !Split
+                  - "/"
+                  - !Ref "AWS::StackId"
+      RepositoryDescription: "MLOps tf Code Commit Repository"
+      Code:
+        S3:
+          Bucket: !Ref LambdaSeedBucket 
+          Key: seedcode.zip
+        BranchName: !Ref RepositoryBranch
+
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties: 
+      RoleArn: !GetAtt [CodePipelineRole, Arn]
+      ArtifactStore:
+        Location:
+          Ref:
+            CodePipelineArtifactBucket
+        Type: S3
+      Stages: 
+        - 
+          Name: Source
+          Actions: 
+            - 
+              Name: TrainScript
+              ActionTypeId: 
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              OutputArtifacts: 
+                - Name: CodeArtifact
+              Configuration: 
+                BranchName: 
+                  Ref: RepositoryBranch
+                RepositoryName: !GetAtt [CodeCommitRepo, Name]
+              RunOrder: 1
+        - 
+          Name: Build
+          Actions: 
+            - 
+              Name: BuildTrainScript
+              ActionTypeId: 
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: TrainPyArtifact
+              InputArtifacts:
+                - Name: CodeArtifact
+              Configuration:
+                ProjectName: !Ref TrainCodeBuild
+              RunOrder: 1        
+        - 
+          Name: TrainModel
+          Actions: 
+            - 
+              Name: PrepareData
+              ActionTypeId: 
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              OutputArtifacts:
+                - Name: prepareInfo
+              InputArtifacts:
+                - Name: CodeArtifact
+              Configuration:
+                FunctionName: 
+                  Fn::Join:
+                    - ""
+                    - - "MLOps-tf-PrepareData-"
+                      - !Ref UniqueID
+                UserParameters: ' { "stage": "Training"}} '
+              RunOrder: 1
+            - 
+              Name: StartTraining
+              ActionTypeId: 
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              OutputArtifacts:
+                - Name: jobEventInfo
+              InputArtifacts:
+                - Name: CodeArtifact
+              Configuration:
+                FunctionName: 
+                  Fn::Join:
+                    - ""
+                    - - "MLOps-tf-TrainModel-"
+                      - !Ref UniqueID
+                UserParameters: ' {"traincompute": "ml.p3.2xlarge" , "traininstancevolumesize": 10, "traininstancecount": 1} '
+              RunOrder: 2
+            - 
+              Name: GetTrainingStatus
+              ActionTypeId: 
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              OutputArtifacts:
+                - Name: CompletedTraining
+              InputArtifacts:
+                - Name: jobEventInfo
+              Configuration:
+                FunctionName: 
+                  Fn::Join:
+                    - ""
+                    - - "MLOps-tf-GetStatus-"
+                      - !Ref UniqueID
+                UserParameters: ' { "stage": "Training"} '
+              RunOrder: 3
+        - 
+          Name: DeployModel-Dev
+          Actions: 
+            - 
+              Name: DeployToDevEnv
+              ActionTypeId: 
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              OutputArtifacts:
+                - Name: HostingInfo
+              InputArtifacts:
+                - Name: CompletedTraining
+              Configuration:
+                FunctionName: 
+                  Fn::Join:
+                    - ""
+                    - - "MLOps-tf-DeployModel-"
+                      - !Ref UniqueID
+                UserParameters: '{ "InitialInstanceCount": 1, "InitialVariantWeight": 1, "InstanceType": "ml.p2.xlarge", "EndpointConfigName": "Dev" }'
+              RunOrder: 1
+            - 
+              Name: GetDeployStatus
+              ActionTypeId: 
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              OutputArtifacts:
+                - Name: CompletedDevDeploy
+              InputArtifacts:
+                - Name: HostingInfo
+              Configuration:
+                FunctionName: 
+                  Fn::Join:
+                    - ""
+                    - - "MLOps-tf-GetStatus-"
+                      - !Ref UniqueID
+                UserParameters: ' { "stage": "Deployment"} '
+              RunOrder: 2
+            - 
+              Name: DevTest
+              ActionTypeId: 
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              OutputArtifacts:
+                - Name: DevTestOut
+              InputArtifacts:
+                - Name: HostingInfo
+              Configuration:
+                FunctionName:   
+                  Fn::Join:
+                    - ""
+                    - - "MLOps-tf-EvaluateModel-"
+                      - !Ref UniqueID
+                UserParameters: ' { "env": "Dev" } '
+              RunOrder: 3
+        - 
+          Name: DeployModel-Test
+          Actions: 
+            - 
+              Name: DeployToTestEnv
+              ActionTypeId: 
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              OutputArtifacts:
+                - Name: HostingInfoTest
+              InputArtifacts:
+                - Name: CompletedTraining
+              Configuration:
+                FunctionName: 
+                  Fn::Join:
+                    - ""
+                    - - "MLOps-tf-DeployModel-"
+                      - !Ref UniqueID
+                UserParameters: '{ "InitialInstanceCount": 1, "InitialVariantWeight": 1, "InstanceType": "ml.p2.xlarge", "EndpointConfigName": "Test" }'
+              RunOrder: 1
+            - 
+              Name: GetDeployStatus
+              ActionTypeId: 
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              OutputArtifacts:
+                - Name: CompletedTestDeploy
+              InputArtifacts:
+                - Name: HostingInfoTest
+              Configuration:
+                FunctionName: 
+                  Fn::Join:
+                    - ""
+                    - - "MLOps-tf-GetStatus-"
+                      - !Ref UniqueID
+                UserParameters: ' { "stage": "Deployment"} '
+              RunOrder: 2
+            - 
+              Name: FullTest
+              ActionTypeId: 
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              OutputArtifacts:
+                - Name: FullTestOut
+              InputArtifacts:
+                - Name: HostingInfoTest
+              Configuration:
+                FunctionName:   
+                  Fn::Join:
+                    - ""
+                    - - "MLOps-tf-EvaluateModel-"
+                      - !Ref UniqueID
+                UserParameters: '{ "env": "Test" } '
+              RunOrder: 3
+        - 
+          Name: DeployModel-Prod
+          Actions: 
+            - 
+              Name: DeployToProdEnv
+              ActionTypeId: 
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              OutputArtifacts:
+                - Name: HostingInfoProd
+              InputArtifacts:
+                - Name: CompletedTraining
+              Configuration:
+                FunctionName: 
+                  Fn::Join:
+                    - ""
+                    - - "MLOps-tf-DeployModel-"
+                      - !Ref UniqueID
+                UserParameters: '{ "InitialInstanceCount": 1, "InitialVariantWeight": 1, "InstanceType": "ml.p2.xlarge", "EndpointConfigName": "Prod" }'
+              RunOrder: 1
+            - 
+              Name: GetDeployStatus
+              ActionTypeId: 
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              OutputArtifacts:
+                - Name: CompletedProdDeploy
+              InputArtifacts:
+                - Name: HostingInfoProd
+              Configuration:
+                FunctionName: 
+                  Fn::Join:
+                    - ""
+                    - - "MLOps-tf-GetStatus-"
+                      - !Ref UniqueID
+                UserParameters: ' { "stage": "Deployment"} '
+              RunOrder: 2
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codepipeline.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      RoleName: 
+        Fn::Join:
+          - ""
+          - - "MLOps-tf-CodeBuild-ServiceRole-"
+            - !Ref UniqueID
+
+  TrainCodeBuild:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildRole
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables: 
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region 
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: Train_Code_Bucket
+            Value: !Ref S3DataBucket
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: code/buildspec.yml
+      TimeoutInMinutes: 10
+      Name: !Sub ${AWS::StackName}TrainCodeBuild
+      ServiceRole: !Ref CodeBuildRole
+
+  TrainLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+      Handler: "MLOps-tf-TrainModel.lambda_handler"
+      Role: !GetAtt [LambdaExecutionRole, Arn]
+      Environment: 
+        Variables:
+          SageMakerExecutionRole: !GetAtt [SageMakerRole, Arn]
+          SSEKMSKeyIdIn: !Ref KMSMasterKeyID
+          ModelArtifactBucket: !Ref ModelArtifactBucket
+          S3DataBucket: !Ref S3DataBucket
+          AlgoECR: "763104351884.dkr.ecr.us-east-1.amazonaws.com/tensorflow-training:2.5.0-gpu-py37-cu112-ubuntu18.04"
+      FunctionName: 
+        Fn::Join:
+         - ""
+         - - "MLOps-tf-TrainModel-"
+           - !Ref UniqueID
+      Code:
+        S3Bucket: !Ref LambdaSeedBucket
+        S3Key: "MLOps-tf-TrainModel.py.zip"
+      Runtime: "python3.7"
+      Timeout: 900
+      MemorySize: 10240
+
+  DeployLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+      Handler: "MLOps-tf-DeployModel.lambda_handler"
+      Role: !GetAtt [LambdaExecutionRole, Arn]
+      Environment: 
+        Variables:
+          SageMakerExecutionRole: !GetAtt [SageMakerRole, Arn]
+          SSEKMSKeyIdIn: !Ref KMSMasterKeyID
+          S3DataBucket: !Ref S3DataBucket
+          InferenceIMG: "763104351884.dkr.ecr.us-east-1.amazonaws.com/tensorflow-inference:2.5.1-gpu-py37-cu112-ubuntu18.04"
+      FunctionName: 
+        Fn::Join:
+         - ""
+         - - "MLOps-tf-DeployModel-"
+           - !Ref UniqueID
+      Code:
+        S3Bucket: !Ref LambdaSeedBucket
+        S3Key: "MLOps-tf-DeployModel.py.zip"
+      Runtime: "python3.7"
+      Timeout: 900
+
+  GetStatusLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+      Handler: "MLOps-tf-GetStatus.lambda_handler"
+      Role: !GetAtt [LambdaExecutionRole, Arn]
+      Environment: 
+        Variables:
+          SageMakerExecutionRole: !GetAtt [SageMakerRole, Arn]
+          SSEKMSKeyIdIn: !Ref KMSMasterKeyID
+      FunctionName: 
+        Fn::Join:
+         - ""
+         - - "MLOps-tf-GetStatus-"
+           - !Ref UniqueID
+      Code:
+        S3Bucket: !Ref LambdaSeedBucket
+        S3Key: "MLOps-tf-GetStatus.py.zip"
+      Runtime: "python3.7"
+      Timeout: 900
+
+  EvaluateModelLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+      Handler: "MLOps-tf-EvaluateModel.lambda_handler"
+      Role: !GetAtt [LambdaExecutionRole, Arn]
+      Environment: 
+        Variables:
+          SageMakerExecutionRole: !GetAtt [SageMakerRole, Arn]
+          SSEKMSKeyIdIn: !Ref KMSMasterKeyID
+          S3DataBucket: !Ref S3DataBucket
+      FunctionName: 
+        Fn::Join:
+         - ""
+         - - "MLOps-tf-EvaluateModel-"
+           - !Ref UniqueID
+      Code:
+        S3Bucket: !Ref LambdaSeedBucket 
+        S3Key: "MLOps-tf-EvaluateModel.py.zip"
+      Runtime: "python3.7"
+      Timeout: 900
+      MemorySize: 5307
+      Layers:
+        - arn:aws:lambda:us-east-1:668099181075:layer:AWSLambda-Python37-SciPy1x:37
+
+  PandasLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: 
+        Fn::Join:
+         - ""
+         - - "MLOps-tf-pandas-layer-"
+           - !Ref UniqueID
+      Description: "Pandas, Numpy, and file processing packages for Python3.7"
+      Content:
+        S3Bucket: !Ref LambdaSeedBucket 
+        S3Key: "pandas_layer.zip"
+      CompatibleRuntimes:
+        - python3.7
+      LicenseInfo: "MIT"
+
+  DataPreparationLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+      Handler: "MLOps-tf-PrepareData.lambda_handler"
+      Role: !GetAtt [LambdaExecutionRole, Arn]
+      Environment: 
+        Variables:
+          SageMakerExecutionRole: !GetAtt [SageMakerRole, Arn]
+          SSEKMSKeyIdIn: !Ref KMSMasterKeyID
+          S3DataBucket: !Ref S3DataBucket
+      FunctionName: 
+        Fn::Join:
+         - ""
+         - - "MLOps-tf-PrepareData-"
+           - !Ref UniqueID
+      Code:
+        S3Bucket: !Ref LambdaSeedBucket 
+        S3Key: "MLOps-tf-PrepareData.py.zip"
+      Runtime: "python3.7"
+      Timeout: 900
+      MemorySize: 5307
+      Layers:
+        - !Ref PandasLayer
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      RoleName: 
+        Fn::Join:
+          - ""
+          - - "MLOps-CodeBuild-ServiceRole-"
+            - !Ref UniqueID
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/CloudWatchFullAccess
+        - arn:aws:iam::aws:policy/AWSCodePipelineFullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      RoleName: 
+       Fn::Join:
+          - ""
+          - - "MLOps-tf-Lambda-ServiceRole-"
+            - !Ref UniqueID
+
+  SageMakerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: sagemaker.amazonaws.com 
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/CloudWatchFullAccess
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess
+      RoleName: 
+       Fn::Join:
+          - ""
+          - - "MLOps-tf-SageMaker-ServiceRole"
+            - !Ref UniqueID
+
+  KMSMasterKeyID:
+    Type: AWS::KMS::Key
+    Properties: 
+      Description: "An example CMK"
+      KeyPolicy: 
+        Version: "2012-10-17"
+        Id: "key-default-1"
+        Statement:
+          - Sid: "Enable IAM User Permissions"
+            Effect: "Allow"
+            Principal: 
+              AWS: 
+                Fn::Join:
+                 - ""
+                 - - "arn:aws:iam::"
+                   - !Ref AWS::AccountId
+                   - ":root"
+            Action: "kms:*"
+            Resource: "*"
+
+Outputs:
+      S3DataBucket:
+        Description: The ID of the S3 Bucket for model training and test data
+        Value: !Ref S3DataBucket
+      ModelArtifactBucket:
+        Description: S3 Bucket for storing model ArtifactStore
+        Value: !Ref ModelArtifactBucket
+      CodePipeline:
+        Description: Pipeline created inside the CodePipeline service-role
+        Value: !Ref CodePipeline
+      CodeCommitRepo:
+        Description: The ID of the CodeCommit Repository
+        Value: !Ref CodeCommitRepo 

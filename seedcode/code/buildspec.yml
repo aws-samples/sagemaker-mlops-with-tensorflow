@@ -1,0 +1,28 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - printenv | less
+      - dt=`date '+%m-%d-%Y-%H-%M-%S'`
+      - echo "Get sample date from NASA"
+      - wget https://ti.arc.nasa.gov/m/project/prognostic-repository/CMAPSSData.zip -O CMAPSSData.zip
+      - unzip CMAPSSData.zip 
+      - echo "Copy raw data to s3://${Train_Code_Bucket}/raw "
+      - aws s3 cp . s3://${Train_Code_Bucket}/raw --recursive --exclude="*" --include="*.txt"
+      - echo "pre_build done"
+  build:
+    commands:
+      - echo "Generate tar file"
+      - tar -zcvf ./source.tar.gz ./code/tf_api_train.py
+      - echo "source.tar.gz generated"
+  post_build:
+    commands:
+      - echo "Save to S3 bucket"
+      - aws s3 cp ./source.tar.gz s3://$Train_Code_Bucket
+      - echo "source.tar.gz saved to S3"
+
+artifacts:
+  files:
+    - 'code/*'
+  name: Train-Code-$(date +%Y-%m-%d) 
