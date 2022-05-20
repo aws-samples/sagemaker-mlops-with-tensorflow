@@ -27,8 +27,8 @@ CFN_TEMPLATE="CF-MLOps-TensorFlow-Pipeline.yml"
 DEPLOYMENT_REGION="us-east-1"
 
 STACK_NAME="MLOps-TensorFlow-FrameWork-CICD"
-#3-letter unique id
-Unique_ID="wad"
+#3-letter unique id. INPUT YOUR OWN ID
+Unique_ID="<YOUR ID>"
 
 UPLOAD_LST="MLOps-tf-EvaluateModel.py.zip MLOps-tf-DeployModel.py.zip MLOps-tf-GetStatus.py.zip MLOps-tf-PrepareData.py.zip MLOps-tf-TrainModel.py.zip pandas_layer.zip seedcode.zip"
 
