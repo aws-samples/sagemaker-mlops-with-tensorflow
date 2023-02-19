@@ -29,6 +29,7 @@ DEPLOYMENT_REGION="us-east-1"
 STACK_NAME="MLOps-TensorFlow-FrameWork-CICD"
 #3-letter unique id. INPUT YOUR OWN ID
 Unique_ID="<YOUR ID>"
+KmsKey="YOUR KMS KEY"
 
 UPLOAD_LST="MLOps-tf-EvaluateModel.py.zip MLOps-tf-DeployModel.py.zip MLOps-tf-GetStatus.py.zip MLOps-tf-PrepareData.py.zip MLOps-tf-TrainModel.py.zip pandas_layer.zip seedcode.zip"
 
@@ -69,7 +70,7 @@ aws cloudformation deploy \
         --template-file ${CFN_TEMPLATE} \
         --stack-name ${STACK_NAME} \
         --capabilities CAPABILITY_NAMED_IAM \
-        --parameter-overrides "UniqueID"=${Unique_ID} "LambdaSeedBucket"=${SEED_BUCKET_NAME}
+        --parameter-overrides "UniqueID"=${Unique_ID} "LambdaSeedBucket"=${SEED_BUCKET_NAME} "KmsKey"=${KmsKey}
 
 echo ==================================================
 echo "Deoployment complete."

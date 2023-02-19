@@ -17,6 +17,10 @@ Parameters:
     Type: String
     Default: mlops-tf-lambda-code-yourinitials-uniqueid
     Description: S3 Bucket containing your Lambda Functions
+  KmsKey:
+    Type: String
+    Default: your-own-kms-key
+    Description: S3 Bucket KMS Key
   
 Resources:
 
@@ -26,6 +30,11 @@ Resources:
       AccessControl: BucketOwnerFullControl
       VersioningConfiguration: 
         Status: Enabled
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration: 
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: aws:kms
+            KMSMasterKeyID: !Ref KmsKey 
       BucketName:
         Fn::Join:
           - ""
@@ -41,6 +50,41 @@ Resources:
                 - !Split
                   - "/"
                   - !Ref "AWS::StackId"
+  CodePipelineArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CodePipelineArtifactBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 's3:PutObject'
+            Effect: Deny
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref CodePipelineArtifactBucket
+                - /*
+            Principal: '*'
+            Condition:
+              'StringNotEquals':
+                's3:x-amz-server-side-encryption':
+                  'aws:kms'
+            SID: DenyIncorrectEncryptionHeader
+          - Action:
+              - 's3:PutObject'
+            Effect: Deny
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref CodePipelineArtifactBucket
+                - /*
+            Principal: '*'
+            Condition:
+              'Null':
+                's3:x-amz-server-side-encryption':
+                  'true'
+            SID: DenyPublishingUnencryptedResources
   #   ------------------------------------------------------------------------------
   #   Create S3 bucket to store model artifacts created by after successfully 
   #   completed training of the model. 
@@ -51,6 +95,11 @@ Resources:
       AccessControl: BucketOwnerFullControl
       VersioningConfiguration: 
         Status: Enabled
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration: 
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: aws:kms
+            KMSMasterKeyID: !Ref KmsKey  
       BucketName:
         Fn::Join:
           - ""
@@ -66,13 +115,52 @@ Resources:
                 - !Split
                   - "/"
                   - !Ref "AWS::StackId"
- 
+  ModelArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ModelArtifactBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 's3:PutObject'
+            Effect: Deny
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref ModelArtifactBucket
+                - /*
+            Principal: '*'
+            Condition:
+              'StringNotEquals':
+                's3:x-amz-server-side-encryption':
+                  'aws:kms'
+            SID: DenyIncorrectEncryptionHeader
+          - Action:
+              - 's3:PutObject'
+            Effect: Deny
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref ModelArtifactBucket
+                - /*
+            Principal: '*'
+            Condition:
+              'Null':
+                's3:x-amz-server-side-encryption':
+                  'true'
+            SID: DenyPublishingUnencryptedResources
   S3DataBucket:
     Type: AWS::S3::Bucket
     Properties: 
       AccessControl: BucketOwnerFullControl
       VersioningConfiguration: 
         Status: Enabled
+      BucketEncryption: 
+        ServerSideEncryptionConfiguration: 
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: aws:kms
+            KMSMasterKeyID: !Ref KmsKey   
       BucketName:
         Fn::Join:
           - ""
@@ -88,7 +176,41 @@ Resources:
                 - !Split
                   - "/"
                   - !Ref "AWS::StackId"
-   
+  S3DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3DataBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 's3:PutObject'
+            Effect: Deny
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref S3DataBucket
+                - /*
+            Principal: '*'
+            Condition:
+              'StringNotEquals':
+                's3:x-amz-server-side-encryption':
+                  'aws:kms'
+            SID: DenyIncorrectEncryptionHeader
+          - Action:
+              - 's3:PutObject'
+            Effect: Deny
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref S3DataBucket
+                - /*
+            Principal: '*'
+            Condition:
+              'Null':
+                's3:x-amz-server-side-encryption':
+                  'true'
+            SID: DenyPublishingUnencryptedResources
   CodeCommitRepo:
     Type: AWS::CodeCommit::Repository
     Properties:
